@@ -1,12 +1,375 @@
-
-use image::{GenericImage, ImageBuffer, Pixel};
-use crate::definitions::{Clamp, Image};
-use conv::ValueInto;
 use std::f32;
 use std::i32;
 
+use conv::ValueInto;
+use image::{GenericImage, ImageBuffer, Pixel};
+use rusttype::{Font, point, PositionedGlyph, Scale, VMetrics};
+
+use crate::definitions::{Clamp, Image};
 use crate::pixelops::weighted_sum;
-use rusttype::{Font, Scale, point, PositionedGlyph};
+use crate::rect::Rect;
+
+/// An arrangement of glyphs which can be drawn onto an image.
+/// This string also knows about its size, according to scaling and font properties.
+pub struct GlyphString<'a> {
+    glyphs: Vec<PositionedGlyph<'a>>
+}
+
+impl<'a> GlyphString<'a> {
+    /// Construct a `GlyphString` from `text` scaled by `scale` using the Font `font`.
+    pub fn new(scale: Scale, font: &'a Font<'a>, text: &'a str) -> Self {
+        let v_metrics = font.v_metrics(scale);
+        let offset = point(0.0, v_metrics.ascent);
+
+        let glyphs = font.layout(text, scale, offset).collect();
+
+        Self { glyphs }
+    }
+
+    /// Find out how much horizontal space this `GlyphString` needs when drawn.
+    // https://docs.rs/artano/0.2.8/src/artano/annotation.rs.html#270-277
+    pub fn width(&self) -> u32 {
+        2 + self.glyphs.iter()
+            .map(|glyph| glyph.unpositioned().h_metrics().advance_width)
+            .sum::<f32>() as u32
+    }
+
+    /// Find out how much vertical space this `GlyphString` needs when drawn.
+    pub fn height(&self) -> u32 {
+        self.glyphs.first().map(|glyph| {
+            let scale = glyph.scale();
+            let font = glyph.font().unwrap();
+
+            let VMetrics {
+                ascent, descent, ..
+            } = font.v_metrics(scale);
+            ((ascent - descent) as f32 * 1.1) as u32
+        }).unwrap_or(0)
+    }
+
+    /// Draws this `GlyphString` onto the `image` at the given coordinates `x` and `y`.
+    /// For an out-of-place version use [`GlyphString::draw`](#method.draw).
+    /// Behaves identical to [`draw_text_mut`](fn.draw_text_mut)
+    pub fn draw_mut<I>(&self, image: &mut I, color: I::Pixel, x: u32, y: u32)
+        where I: GenericImage,
+              <I::Pixel as Pixel>::Subpixel: ValueInto<f32> + Clamp<f32>, {
+        for g in self.glyphs.iter() {
+            if let Some(bb) = g.pixel_bounding_box() {
+                g.draw(|gx, gy, gv| {
+                    let gx = gx as i32 + bb.min.x;
+                    let gy = gy as i32 + bb.min.y;
+
+                    let image_x = gx + x as i32;
+                    let image_y = gy + y as i32;
+
+                    let image_width = image.width() as i32;
+                    let image_height = image.height() as i32;
+
+                    if image_x >= 0 && image_x < image_width && image_y >= 0 && image_y < image_height {
+                        let pixel = image.get_pixel(image_x as u32, image_y as u32);
+                        let weighted_color = weighted_sum(pixel, color, 1.0 - gv, gv);
+                        image.put_pixel(image_x as u32, image_y as u32, weighted_color);
+                    }
+                })
+            }
+        }
+    }
+
+    /// Draws this `GlyphString` onto a copy of `image` at the given coordinates `x` and `y` and return the copy.
+    /// For an in-place version use [`GlyphString::draw_mut`](#method.draw_mut).
+    /// Behaves identical to [`draw_text`](fn.draw_text.html).
+    pub fn draw<I>(&self, image: &I, color: I::Pixel, x: u32, y: u32) -> Image<I::Pixel>
+        where I: GenericImage,
+              <I::Pixel as Pixel>::Subpixel: ValueInto<f32> + Clamp<f32>,
+              I::Pixel: 'static, {
+        let mut out = ImageBuffer::new(image.width(), image.height());
+        out.copy_from(image, 0, 0);
+        self.draw_mut(&mut out, color, x, y);
+        out
+    }
+
+    /// Draws this `GlyphString` onto the `image` inside a `rectangle` at a `position`.
+    /// For an out-of-place version use [`GlyphString::draw_positioned`](#method.draw_positioned).
+    ///
+    /// ##Example: drawing some text to the center and top-left corner of an image
+    /// ```rust
+    /// use imageproc::drawing::{EdgePosition, GlyphString, Position};
+    /// use imageproc::rect::Rect;
+    /// use image::ImageBuffer;
+    /// use rusttype::{Scale, FontCollection};
+    ///
+    /// let text = "Hello World";
+    /// let scale = Scale::uniform(12.0);
+    /// let mut image = ImageBuffer::from_pixel(100, 100, Rgb([0u8, 0u8, 0u8]));
+    /// let rect = Rect::at(0, 0).of_size(image.width(), image.height());
+    ///
+    /// let position = Position::HorizontalCenter(50.0.into());
+    /// GlyphString::new(scale, &font, &text)
+    ///     .draw_positioned_mut(&mut image, Rgb([0u8, 0u8, 255u8]), &position, &rect);
+    ///
+    /// let position = Position::HorizontalTop(0.0.into());
+    /// GlyphString::new(scale, &font, &text)
+    ///     .draw_positioned_mut(&mut image, Rgb([0u8, 255u8, 0u8]), &position, &rect);
+    /// ```
+    ///
+    /// What we are doing here:
+    ///
+    ///     1. Find an x, y such that
+    ///         1.1 (x, y) lies on the edge of `position` and inside of `rectangle`
+    ///         1.2 (x, y) should be the top-left corner of the text area (the space consumed by the glyphs)
+    ///         1.3 the text area should divide the rectangle according to the given `position`
+    ///         1.4 there should be an equal padding in all directions (from the edges of the text area to the edges of rectangle)
+    ///     2. Draw the text to x, y
+    ///
+    /// <pre>
+    ///     +-----------------------------------------+  = `image` bounds
+    ///     |                                         |
+    ///     |     +-----------------------------+     |  = `rectangle` bounds
+    ///     |     |                             |     |
+    ///     |     |     +-----------------+     |     |  = text area <- y
+    ///     |     |     |Some example text|     |     |
+    ///     |     |     +-----------------+     |     |
+    ///     |     |                             |     |
+    ///     |     +-----------------------------+     |
+    ///     |                                         |
+    ///     +-----------------------------------------+
+    ///
+    ///                 ^
+    ///                 |
+    ///                 x
+    /// </pre>
+    pub fn draw_positioned_mut<'b, I>(&self, image: &'b mut I, color: I::Pixel, position: &Position, rectangle: &Rect)
+        where I: GenericImage,
+              <I::Pixel as Pixel>::Subpixel: ValueInto<f32> + Clamp<f32>, {
+        let (x, y) = match position {
+            Position::HorizontalCenter(edge_position) => (
+                (rectangle.left() as f32 + (rectangle.width() - self.width()) as f32 * edge_position.0 / 100.0) as u32,
+                (rectangle.bottom() as u32 - self.height()) / 2
+            ),
+            Position::HorizontalBottom(edge_position) => (
+                (rectangle.left() as f32 + (rectangle.width() - self.width()) as f32 * edge_position.0 / 100.0) as u32,
+                rectangle.bottom() as u32 - self.height()
+            ),
+            Position::HorizontalTop(edge_position) => (
+                (rectangle.left() as f32 + (rectangle.width() - self.width()) as f32 * edge_position.0 / 100.0) as u32,
+                0
+            ),
+            Position::VerticalCenter(edge_position) => (
+                (rectangle.bottom() as u32 - self.height()) / 2,
+                (rectangle.left() as f32 + (rectangle.width() - self.width()) as f32 * edge_position.0 / 100.0) as u32
+            ),
+            Position::VerticalRight(edge_position) => (
+                rectangle.bottom() as u32 - self.height(),
+                (rectangle.left() as f32 + (rectangle.width() - self.width()) as f32 * edge_position.0 / 100.0) as u32
+            ),
+            Position::VerticalLeft(edge_position) => (
+                0,
+                (rectangle.left() as f32 + (rectangle.width() - self.width()) as f32 * edge_position.0 / 100.0) as u32
+            ),
+            Position::Any(horizontal_edge, vertical_edge) => (
+                (rectangle.left() as f32 + (rectangle.width() - self.width()) as f32 * horizontal_edge.0 / 100.0) as u32,
+                (rectangle.top() as f32 + (rectangle.height() - self.height()) as f32 * vertical_edge.0 / 100.0) as u32
+            ),
+        };
+
+        self.draw_mut(image, color, x, y)
+    }
+
+    /// Draws this `GlyphString` onto a copy of `image` at the given coordinates `x` and `y` and return the copy.
+    /// For an in-place version use [`GlyphString::draw_positioned_mut`](#method.draw_positioned_mut).
+    pub fn draw_positioned<I>(&self, image: &I, color: I::Pixel, position: &Position, rectangle: &Rect) -> Image<I::Pixel>
+        where I: GenericImage,
+              <I::Pixel as Pixel>::Subpixel: ValueInto<f32> + Clamp<f32>,
+              I::Pixel: 'static, {
+        let mut out = ImageBuffer::new(image.width(), image.height());
+        out.copy_from(image, 0, 0);
+        self.draw_positioned_mut(&mut out, color, position, rectangle);
+        out
+    }
+}
+
+/// The relative position of a point on an edge.
+///
+/// +--------------------------------+
+/// 0%       something else          100%
+///
+/// Edge in this context does not exclusively refer to the edges
+/// which are boundaries of a rectangle but rather all lines which are parallel to two opposing boundaries.
+///
+/// <pre>
+///    +---------------+  <- "typical" horizontal edge
+///    |               |
+///    +---------------+  <- "typical" horizontal edge
+///    ^               ^
+///    |               |
+/// "typical" vertical edges
+///
+///   +---------------+
+///   |               |
+///   |---------------| <- parallel to horizontal edges (= also an edge)
+///   |               |
+///   +---------------+
+/// </pre>
+pub struct EdgePosition(pub f32);
+
+impl EdgePosition {
+    /// The left-most point of a horizontal edge.
+    /// Equivalent to `EdgePosition(0.into())`.
+    pub fn left() -> Self { 0.into() }
+    /// The top-most point of a vertical edge.
+    /// Equivalent to `EdgePosition(0.into())`.
+    pub fn top() -> Self { 0.into() }
+
+    /// The center point of a horizontal or vertical edge.
+    /// Equivalent to `EdgePosition(50.into())`.
+    pub fn center() -> Self { 50.into() }
+
+    /// The right-most point of a horizontal edge.
+    /// Equivalent to `EdgePosition(100.into())`.
+    pub fn right() -> Self { 100.into() }
+    /// The bottom-most point of a vertical edge.
+    /// Equivalent to `EdgePosition(100.into())`.
+    pub fn bottom() -> Self { 100.into() }
+}
+
+impl From<f32> for EdgePosition {
+    fn from(from: f32) -> Self {
+        Self(from)
+    }
+}
+
+impl From<u32> for EdgePosition {
+    fn from(from: u32) -> Self {
+        Self(from as _)
+    }
+}
+
+/// A position inside a rectangle
+pub enum Position {
+    /// top edge
+    /// <pre>
+    /// +---------------+  <- this
+    /// |               |
+    /// +---------------+
+    /// </pre>
+    HorizontalTop(EdgePosition),
+    /// horizontal center edge (horizontally centered between top and bottom)
+    /// <pre>
+    /// +---------------+
+    /// |               |
+    /// |---------------| <- this
+    /// |               |
+    /// +---------------+
+    /// </pre>
+    HorizontalCenter(EdgePosition),
+    /// bottom edge
+    /// <pre>
+    /// +---------------+
+    /// |               |
+    /// +---------------+  <- this
+    /// </pre>
+    HorizontalBottom(EdgePosition),
+    /// left edge
+    /// <pre>
+    /// +---------------+
+    /// |               |
+    /// +---------------+
+    /// ^
+    /// |
+    /// this
+    /// </pre>
+    VerticalLeft(EdgePosition),
+    /// Vertical center edge (vertically centered between left and right)
+    /// <pre>
+    /// +---------------+
+    /// |       |       |
+    /// |       |       |
+    /// |       |       |
+    /// +---------------+
+    ///         ^
+    ///         |
+    ///         this
+    /// </pre>
+    VerticalCenter(EdgePosition),
+    /// left edge
+    /// <pre>
+    /// +---------------+
+    /// |               |
+    /// +---------------+
+    ///                 ^
+    ///                 |
+    ///                 this
+    /// </pre>
+    VerticalRight(EdgePosition),
+    /// fine-grained control over horizontal and vertical edges
+    Any(EdgePosition, EdgePosition),
+}
+
+/// An arrangement of PositionedGlyphStrings
+pub struct GlyphStrings<'a>(pub &'a [&'a GlyphString<'a>]);
+
+impl<'a> GlyphStrings<'a> {
+    /// create
+    #[inline]
+    pub fn new(glyph_strings: &'a [&GlyphString<'a>]) -> Self {
+        Self(glyph_strings)
+    }
+
+    /// draw text
+    #[inline]
+    pub fn draw_positioned_mut<'b, I>(&self, image: &'b mut I, colors: &[I::Pixel], position: &Position, rectangle: &Rect)
+        where I: GenericImage,
+              <I::Pixel as Pixel>::Subpixel: ValueInto<f32> + Clamp<f32>, {
+        let total_text_width = self.width();
+        let total_font_height = self.height();
+
+        let (mut x, y) = match position {
+            Position::HorizontalCenter(edge_position) => (
+                (rectangle.left() as f32 + (rectangle.width() - total_text_width) as f32 * edge_position.0 / 100.0) as u32,
+                (rectangle.bottom() as u32 - total_font_height) / 2
+            ),
+            Position::HorizontalBottom(edge_position) => (
+                (rectangle.left() as f32 + (rectangle.width() - total_text_width) as f32 * edge_position.0 / 100.0) as u32,
+                rectangle.bottom() as u32 - total_font_height
+            ),
+            Position::HorizontalTop(edge_position) => (
+                (rectangle.left() as f32 + (rectangle.width() - total_text_width) as f32 * edge_position.0 / 100.0) as u32,
+                0
+            ),
+            Position::VerticalCenter(edge_position) => (
+                (rectangle.bottom() as u32 - total_font_height) / 2,
+                (rectangle.left() as f32 + (rectangle.width() - total_text_width) as f32 * edge_position.0 / 100.0) as u32
+            ),
+            Position::VerticalRight(edge_position) => (
+                rectangle.bottom() as u32 - total_font_height,
+                (rectangle.left() as f32 + (rectangle.width() - total_text_width) as f32 * edge_position.0 / 100.0) as u32
+            ),
+            Position::VerticalLeft(edge_position) => (
+                0,
+                (rectangle.left() as f32 + (rectangle.width() - total_text_width) as f32 * edge_position.0 / 100.0) as u32
+            ),
+            Position::Any(horizontal_edge, vertical_edge) => (
+                (rectangle.left() as f32 + (rectangle.width() - total_text_width) as f32 * horizontal_edge.0 / 100.0) as u32,
+                (rectangle.top() as f32 + (rectangle.height() - total_font_height) as f32 * vertical_edge.0 / 100.0) as u32
+            ),
+        };
+
+        for (string, color) in self.0.iter().zip(colors.iter()) {
+            string.draw_mut(image, *color, x as _, y as _);
+            x += string.width()
+        }
+    }
+
+    /// Find out how much vertical space this `GlyphStrings` needs when drawn.
+    pub fn height(&self) -> u32 {
+        self.0.iter().map(|string| string.height()).max().unwrap_or(0)
+    }
+
+    /// Find out how much horizontal space this `GlyphStrings` needs when drawn.
+    pub fn width(&self) -> u32 {
+        self.0.iter().map(|string| string.width()).sum::<u32>()
+    }
+}
 
 /// Draws colored text on an image in place. `scale` is augmented font scaling on both the x and y axis (in pixels). Note that this function *does not* support newlines, you must do this manually
 pub fn draw_text_mut<'a, I>(
@@ -58,10 +421,10 @@ pub fn draw_text<'a, I>(
     font: &'a Font<'a>,
     text: &'a str,
 ) -> Image<I::Pixel>
-where
-    I: GenericImage,
-    <I::Pixel as Pixel>::Subpixel: ValueInto<f32> + Clamp<f32>,
-    I::Pixel: 'static,
+    where
+        I: GenericImage,
+        <I::Pixel as Pixel>::Subpixel: ValueInto<f32> + Clamp<f32>,
+        I::Pixel: 'static,
 {
     let mut out = ImageBuffer::new(image.width(), image.height());
     out.copy_from(image, 0, 0);

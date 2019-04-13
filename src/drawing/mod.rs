@@ -52,6 +52,10 @@ pub use self::rect::{
 
 mod text;
 pub use self::text::{
+    GlyphString,
+    EdgePosition,
+    Position,
+    GlyphStrings,
     draw_text,
     draw_text_mut
 };
