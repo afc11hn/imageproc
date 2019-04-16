@@ -9,6 +9,17 @@ use crate::definitions::{Clamp, Image};
 use crate::pixelops::weighted_sum;
 use crate::rect::Rect;
 
+/// This helper function is used to find the top (or) left corner of a text.
+/// It takes handles only one dimension per call to make it more reusable.
+/// It takes a `rectangle_size` which is the length (width or height) of the surrounding rectangle
+/// and a `content_size` which is the length (width or height) of the text inside.
+/// The `relative_position` is then used to divide the space 
+/// which is not used up by the content (=`content_size`) to determine a padding
+/// inside the rectangle `rectangle_size`.
+fn calculate_center(rectangle_size: u32, content_size: u32, relative_position: &EdgePosition) -> u32 {
+    ((rectangle_size - content_size) as f32 * relative_position.0 / 100.0) as u32
+}
+
 /// An arrangement of glyphs which can be drawn onto an image.
 /// This string also knows about its size, according to scaling and font properties.
 pub struct GlyphString<'a> {
@@ -143,32 +154,32 @@ impl<'a> GlyphString<'a> {
               <I::Pixel as Pixel>::Subpixel: ValueInto<f32> + Clamp<f32>, {
         let (x, y) = match position {
             Position::HorizontalCenter(edge_position) => (
-                (rectangle.left() as f32 + (rectangle.width() - self.width()) as f32 * edge_position.0 / 100.0) as u32,
-                (rectangle.bottom() as u32 - self.height()) / 2
+                rectangle.left() as u32 + calculate_center(rectangle.width(), self.width(), edge_position),
+                rectangle.top() as u32 + ((rectangle.height() - self.height()) / 2) as u32,
             ),
             Position::HorizontalBottom(edge_position) => (
-                (rectangle.left() as f32 + (rectangle.width() - self.width()) as f32 * edge_position.0 / 100.0) as u32,
-                rectangle.bottom() as u32 - self.height()
+                rectangle.left() as u32 + calculate_center(rectangle.width(), self.width(), edge_position),
+                rectangle.bottom() as u32 - self.height(),
             ),
             Position::HorizontalTop(edge_position) => (
-                (rectangle.left() as f32 + (rectangle.width() - self.width()) as f32 * edge_position.0 / 100.0) as u32,
-                0
+                rectangle.left() as u32 + calculate_center(rectangle.width(), self.width(), edge_position),
+                rectangle.top() as u32,
             ),
             Position::VerticalCenter(edge_position) => (
-                (rectangle.bottom() as u32 - self.height()) / 2,
-                (rectangle.left() as f32 + (rectangle.width() - self.width()) as f32 * edge_position.0 / 100.0) as u32
+                rectangle.left() as u32 + ((rectangle.width() - self.width()) / 2) as u32,
+                rectangle.top() as u32 + calculate_center(rectangle.height(), self.height(), edge_position),
             ),
             Position::VerticalRight(edge_position) => (
-                rectangle.bottom() as u32 - self.height(),
-                (rectangle.left() as f32 + (rectangle.width() - self.width()) as f32 * edge_position.0 / 100.0) as u32
+                rectangle.right() as u32 - self.width(),
+                rectangle.top() as u32 + calculate_center(rectangle.height(), self.height(), edge_position),
             ),
             Position::VerticalLeft(edge_position) => (
-                0,
-                (rectangle.left() as f32 + (rectangle.width() - self.width()) as f32 * edge_position.0 / 100.0) as u32
+                rectangle.left() as u32,
+                rectangle.top() as u32 + calculate_center(rectangle.height(), self.height(), edge_position),
             ),
             Position::Any(horizontal_edge, vertical_edge) => (
-                (rectangle.left() as f32 + (rectangle.width() - self.width()) as f32 * horizontal_edge.0 / 100.0) as u32,
-                (rectangle.top() as f32 + (rectangle.height() - self.height()) as f32 * vertical_edge.0 / 100.0) as u32
+                rectangle.left() as u32 + calculate_center(rectangle.width(), self.width(), horizontal_edge),
+                rectangle.top() as u32 + calculate_center(rectangle.height(), self.height(), vertical_edge),
             ),
         };
 
@@ -320,42 +331,39 @@ impl<'a> GlyphStrings<'a> {
     pub fn draw_positioned_mut<'b, I>(&self, image: &'b mut I, colors: &[I::Pixel], position: &Position, rectangle: &Rect)
         where I: GenericImage,
               <I::Pixel as Pixel>::Subpixel: ValueInto<f32> + Clamp<f32>, {
-        let total_text_width = self.width();
-        let total_font_height = self.height();
-
         let (mut x, y) = match position {
             Position::HorizontalCenter(edge_position) => (
-                (rectangle.left() as f32 + (rectangle.width() - total_text_width) as f32 * edge_position.0 / 100.0) as u32,
-                (rectangle.bottom() as u32 - total_font_height) / 2
+                rectangle.left() as u32 + calculate_center(rectangle.width(), self.width(), edge_position),
+                rectangle.top() as u32 + ((rectangle.height() - self.height()) / 2) as u32,
             ),
             Position::HorizontalBottom(edge_position) => (
-                (rectangle.left() as f32 + (rectangle.width() - total_text_width) as f32 * edge_position.0 / 100.0) as u32,
-                rectangle.bottom() as u32 - total_font_height
+                rectangle.left() as u32 + calculate_center(rectangle.width(), self.width(), edge_position),
+                rectangle.bottom() as u32 - self.height(),
             ),
             Position::HorizontalTop(edge_position) => (
-                (rectangle.left() as f32 + (rectangle.width() - total_text_width) as f32 * edge_position.0 / 100.0) as u32,
-                0
+                rectangle.left() as u32 + calculate_center(rectangle.width(), self.width(), edge_position),
+                rectangle.top() as u32,
             ),
             Position::VerticalCenter(edge_position) => (
-                (rectangle.bottom() as u32 - total_font_height) / 2,
-                (rectangle.left() as f32 + (rectangle.width() - total_text_width) as f32 * edge_position.0 / 100.0) as u32
+                rectangle.left() as u32 + ((rectangle.width() - self.width()) / 2) as u32,
+                rectangle.top() as u32 + calculate_center(rectangle.height(), self.height(), edge_position),
             ),
             Position::VerticalRight(edge_position) => (
-                rectangle.bottom() as u32 - total_font_height,
-                (rectangle.left() as f32 + (rectangle.width() - total_text_width) as f32 * edge_position.0 / 100.0) as u32
+                rectangle.right() as u32 - self.width(),
+                rectangle.top() as u32 + calculate_center(rectangle.height(), self.height(), edge_position),
             ),
             Position::VerticalLeft(edge_position) => (
-                0,
-                (rectangle.left() as f32 + (rectangle.width() - total_text_width) as f32 * edge_position.0 / 100.0) as u32
+                rectangle.left() as u32,
+                rectangle.top() as u32 + calculate_center(rectangle.height(), self.height(), edge_position),
             ),
             Position::Any(horizontal_edge, vertical_edge) => (
-                (rectangle.left() as f32 + (rectangle.width() - total_text_width) as f32 * horizontal_edge.0 / 100.0) as u32,
-                (rectangle.top() as f32 + (rectangle.height() - total_font_height) as f32 * vertical_edge.0 / 100.0) as u32
+                rectangle.left() as u32 + calculate_center(rectangle.width(), self.width(), horizontal_edge),
+                rectangle.top() as u32 + calculate_center(rectangle.height(), self.height(), vertical_edge),
             ),
         };
 
-        for (string, color) in self.0.iter().zip(colors.iter()) {
-            string.draw_mut(image, *color, x as _, y as _);
+        for (string, &color) in self.0.iter().zip(colors.iter()) {
+            string.draw_mut(image, color, x as _, y as _);
             x += string.width()
         }
     }
