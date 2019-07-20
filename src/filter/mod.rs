@@ -85,6 +85,7 @@ impl<'a, K: Num + Copy + 'a> Kernel<'a, K> {
     /// Construct a kernel from a slice and its dimensions. The input slice is
     /// in row-major form.
     pub fn new(data: &'a [K], width: u32, height: u32) -> Kernel<'a, K> {
+        assert!(width > 0 && height > 0, "width and height must be non-zero");
         assert!(
             width * height == data.len() as u32,
             format!(
@@ -110,30 +111,23 @@ impl<'a, K: Num + Copy + 'a> Kernel<'a, K> {
         let num_channels = P::channel_count() as usize;
         let zero = K::zero();
         let mut acc = vec![zero; num_channels];
-        let (k_width, k_height) = (self.width, self.height);
+        let (k_width, k_height) = (self.width as i64, self.height as i64);
+        let (width, height) = (width as i64, height as i64);
 
         for y in 0..height {
             for x in 0..width {
                 for k_y in 0..k_height {
-                    let y_p = min(
-                        height + height - 1,
-                        max(height, height + y + k_y - k_height / 2),
-                    ) - height;
+                    let y_p = min(height - 1, max(0, y + k_y - k_height / 2)) as u32;
                     for k_x in 0..k_width {
-                        let x_p = min(
-                            width + width - 1,
-                            max(width, width + x + k_x - k_width / 2),
-                        ) - width;
-                        let (p, k) = unsafe {
-                            (
-                                image.unsafe_get_pixel(x_p, y_p),
-                                *self.data.get_unchecked((k_y * k_width + k_x) as usize),
-                            )
-                        };
-                        accumulate(&mut acc, &p, k);
+                        let x_p = min(width - 1, max(0, x + k_x - k_width / 2)) as u32;
+                        accumulate(
+                            &mut acc,
+                            unsafe { &image.unsafe_get_pixel(x_p, y_p) },
+                            unsafe { *self.data.get_unchecked((k_y * k_width + k_x) as usize) }
+                        );
                     }
                 }
-                let out_channels = out.get_pixel_mut(x, y).channels_mut();
+                let out_channels = out.get_pixel_mut(x as u32, y as u32).channels_mut();
                 for (a, c) in acc.iter_mut().zip(out_channels.iter_mut()) {
                     f(c, *a);
                     *a = zero;
@@ -166,12 +160,17 @@ fn gaussian_kernel_f32(sigma: f32) -> Vec<f32> {
 /// Blurs an image using a Gaussian of standard deviation sigma.
 /// The kernel used has type f32 and all intermediate calculations are performed
 /// at this type.
+///
+/// # Panics
+///
+/// Panics if `sigma <= 0.0`.
 // TODO: Integer type kernel, approximations via repeated box filter.
 pub fn gaussian_blur_f32<P>(image: &Image<P>, sigma: f32) -> Image<P>
 where
     P: Pixel + 'static,
     <P as Pixel>::Subpixel: ValueInto<f32> + Clamp<f32>,
 {
+    assert!(sigma > 0.0, "sigma must be > 0.0");
     let kernel = gaussian_kernel_f32(sigma);
     separable_filter_equal(image, &kernel)
 }
@@ -535,7 +534,7 @@ mod tests {
                     acc += color as f32 * weight;
                 }
 
-                let clamped = u8::clamp(acc);
+                let clamped = <u8 as Clamp<f32>>::clamp(acc);
                 out.put_pixel(x, y, Luma([clamped]));
             }
         }
@@ -567,7 +566,7 @@ mod tests {
                     acc += color as f32 * weight;
                 }
 
-                let clamped = u8::clamp(acc);
+                let clamped = <u8 as Clamp<f32>>::clamp(acc);
                 out.put_pixel(x, y, Luma([clamped]));
             }
         }
@@ -713,6 +712,66 @@ mod tests {
         assert_pixels_eq!(filtered, expected);
     }
 
+    #[test]
+    #[should_panic]
+    fn test_kernel_must_be_nonempty() {
+        let k: Vec<u8> = Vec::new();
+        let _ = Kernel::new(&k, 0, 0);
+    }
+
+    #[test]
+    fn test_kernel_filter_with_even_kernel_side() {
+        let image = gray_image!(
+            3, 2;
+            4, 1);
+
+        let k = vec![1u8, 2u8];
+        let kernel = Kernel::new(&k, 2, 1);
+        let filtered = kernel.filter(&image, |c, a| *c = a);
+
+        let expected = gray_image!(
+             9,  7;
+            12,  6);
+
+        assert_pixels_eq!(filtered, expected);
+    }
+
+    #[test]
+    fn test_kernel_filter_with_empty_image() {
+        let image = gray_image!();
+
+        let k = vec![2u8];
+        let kernel = Kernel::new(&k, 1, 1);
+        let filtered = kernel.filter(&image, |c, a| *c = a);
+
+        let expected = gray_image!();
+        assert_pixels_eq!(filtered, expected);
+    }
+
+    #[test]
+    fn test_kernel_filter_with_kernel_dimensions_larger_than_image() {
+        let image = gray_image!(
+            9, 4;
+            8, 1);
+
+        let k: Vec<f32> = vec![
+            0.1, 0.2, 0.1,
+            0.2, 0.4, 0.2,
+            0.1, 0.2, 0.1
+        ];
+        let kernel = Kernel::new(&k, 3, 3);
+        let filtered: Image<Luma<u8>> = kernel.filter(
+            &image,
+            |c, a| *c = <u8 as Clamp<f32>>::clamp(a)
+        );
+
+        let expected = gray_image!(
+            11,  7;
+            10,  5);
+
+        assert_pixels_eq!(filtered, expected);
+    }
+
     #[bench]
     fn bench_filter3x3_i32_filter(b: &mut Bencher) {
         let image = gray_bench_image(500, 500);
@@ -792,5 +851,27 @@ mod tests {
             let blurred = gaussian_blur_f32(&image, 10f32);
             black_box(blurred);
         });
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_gaussian_blur_f32_rejects_zero_sigma() {
+        let image = gray_image!(
+            1, 2, 3;
+            4, 5, 6;
+            7, 8, 9
+        );
+        let _ = gaussian_blur_f32(&image, 0.0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_gaussian_blur_f32_rejects_negative_sigma() {
+        let image = gray_image!(
+            1, 2, 3;
+            4, 5, 6;
+            7, 8, 9
+        );
+        let _ = gaussian_blur_f32(&image, -0.5);
     }
 }
