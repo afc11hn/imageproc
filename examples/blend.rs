@@ -4,15 +4,13 @@ use image::{ImageBuffer, Rgb};
 use imageproc::pixelops::interpolate;
 
 fn main() {
-    let red = Rgb([255, 0, 0]);
-    let green = Rgb([0, 255, 0]);
+    let red = Rgb::<u8>([255, 0, 0]);
+    let green = Rgb::<u8>([0, 255, 0]);
 
     // We'll create an 800 pixel wide gradient image.
     let left_weight = |x| x as f32 / 800.0;
 
-    let naive_blend = |x| {
-        interpolate(red, green, left_weight(x))
-    };
+    let naive_blend = |x| interpolate(red, green, left_weight(x));
 
     let mut naive_image = ImageBuffer::new(800, 400);
     for y in 0..naive_image.height() {
@@ -37,7 +35,7 @@ fn main() {
         Rgb([
             gamma_blend_channel(red[0], green[0], w),
             gamma_blend_channel(red[1], green[1], w),
-            gamma_blend_channel(red[2], green[2], w)
+            gamma_blend_channel(red[2], green[2], w),
         ])
     };
 

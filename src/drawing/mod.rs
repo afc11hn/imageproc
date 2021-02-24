@@ -1,69 +1,37 @@
 //! Helpers for drawing basic shapes on images.
 
 mod bezier;
-pub use self::bezier::{
-    draw_cubic_bezier_curve,
-    draw_cubic_bezier_curve_mut
-};
+pub use self::bezier::{draw_cubic_bezier_curve, draw_cubic_bezier_curve_mut};
 
 mod canvas;
-pub use self::canvas::{
-    Blend,
-    Canvas
-};
+pub use self::canvas::{Blend, Canvas};
 
 mod conics;
 pub use self::conics::{
-    draw_hollow_ellipse,
-    draw_hollow_ellipse_mut,
-    draw_filled_ellipse,
-    draw_filled_ellipse_mut,
-    draw_hollow_circle,
-    draw_hollow_circle_mut,
-    draw_filled_circle,
-    draw_filled_circle_mut
+    draw_filled_circle, draw_filled_circle_mut, draw_filled_ellipse, draw_filled_ellipse_mut,
+    draw_hollow_circle, draw_hollow_circle_mut, draw_hollow_ellipse, draw_hollow_ellipse_mut,
 };
 
 mod cross;
-pub use self::cross::{
-    draw_cross,
-    draw_cross_mut
-};
+pub use self::cross::{draw_cross, draw_cross_mut};
 
 mod line;
 pub use self::line::{
-    BresenhamLineIter,
-    BresenhamLinePixelIter,
-    BresenhamLinePixelIterMut,
-    draw_line_segment,
-    draw_line_segment_mut,
-    draw_antialiased_line_segment,
-    draw_antialiased_line_segment_mut
+    draw_antialiased_line_segment, draw_antialiased_line_segment_mut, draw_line_segment,
+    draw_line_segment_mut, BresenhamLineIter, BresenhamLinePixelIter, BresenhamLinePixelIterMut,
 };
 
 mod polygon;
-pub use self::polygon::{
-    Point,
-    draw_convex_polygon,
-    draw_convex_polygon_mut
-};
+pub use self::polygon::{draw_polygon, draw_polygon_mut};
 
 mod rect;
 pub use self::rect::{
-    draw_hollow_rect,
-    draw_hollow_rect_mut,
-    draw_filled_rect,
-    draw_filled_rect_mut
+    draw_filled_rect, draw_filled_rect_mut, draw_hollow_rect, draw_hollow_rect_mut,
 };
 
 mod text;
 pub use self::text::{
-    GlyphString,
-    EdgePosition,
-    Position,
-    GlyphStrings,
-    draw_text,
-    draw_text_mut
+    draw_text, draw_text_mut, text_size, EdgePosition, GlyphString, GlyphStrings, Position,
 };
 
 // Set pixel at (x, y) to color if this point lies within image bounds,

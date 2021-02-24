@@ -1,9 +1,8 @@
 //! Functions for suppressing non-maximal values.
 
-use std::cmp;
 use crate::definitions::{Position, Score};
 use image::{GenericImage, ImageBuffer, Luma, Primitive};
-use itertools::Itertools;
+use std::cmp;
 
 /// Returned image has zeroes for all inputs pixels which do not have the greatest
 /// intensity in the (2 * radius + 1) square block centred on them.
@@ -26,8 +25,8 @@ where
     // the (2r + 1) * (2r + 1) search once per r * r grid cell (as opposed to once
     // per pixel in the naive implementation of this algorithm).
 
-    for y in (0..height).step(radius as usize + 1) {
-        for x in (0..width).step(radius as usize + 1) {
+    for y in (0..height).step_by(radius as usize + 1) {
+        for x in (0..width).step_by(radius as usize + 1) {
             let mut best_x = x;
             let mut best_y = y;
             let mut mi = image.get_pixel(x, y)[0];
@@ -113,7 +112,7 @@ where
     T: Position + Score + Copy,
 {
     let mut ordered_ts = ts.to_vec();
-    ordered_ts.sort_by(|c, d| (c.y(), c.x()).cmp(&(d.y(), d.x())));
+    ordered_ts.sort_by_key(|&c| (c.y(), c.x()));
     let height = match ordered_ts.last() {
         Some(t) => t.y(),
         None => 0,
@@ -175,13 +174,12 @@ where
 mod tests {
     use super::{local_maxima, suppress_non_maximum};
     use crate::definitions::{Position, Score};
-    use image::{GenericImage, GrayImage, ImageBuffer, Luma, Primitive};
     use crate::noise::gaussian_noise_mut;
-    use std::cmp;
-    use quickcheck::{quickcheck, TestResult};
-    use itertools::Itertools;
     use crate::property_testing::GrayTestImage;
     use crate::utils::pixel_diff_summary;
+    use image::{GenericImage, GrayImage, ImageBuffer, Luma, Primitive};
+    use quickcheck::{quickcheck, TestResult};
+    use std::cmp;
     use test::Bencher;
 
     #[derive(PartialEq, Debug, Copy, Clone)]
@@ -310,11 +308,9 @@ mod tests {
     fn bench_suppress_non_maximum_decreasing_gradient(b: &mut Bencher) {
         let width = 40u32;
         let height = 20u32;
-        let img = ImageBuffer::from_fn(
-            width,
-            height,
-            |x, y| Luma([((width - x) + (height - y)) as u8]),
-        );
+        let img = ImageBuffer::from_fn(width, height, |x, y| {
+            Luma([((width - x) + (height - y)) as u8])
+        });
         b.iter(|| suppress_non_maximum(&img, 7));
     }
 
@@ -348,7 +344,7 @@ mod tests {
     {
         let (width, height) = image.dimensions();
         let mut out = ImageBuffer::new(width, height);
-        out.copy_from(image, 0, 0);
+        out.copy_from(image, 0, 0).unwrap();
 
         let iradius = radius as i32;
         let iheight = height as i32;
@@ -402,8 +398,8 @@ mod tests {
 
     #[test]
     fn test_step() {
-        assert_eq!((0u32..5).step(4).collect::<Vec<u32>>(), vec![0, 4]);
-        assert_eq!((0u32..4).step(4).collect::<Vec<u32>>(), vec![0]);
-        assert_eq!((4u32..4).step(4).collect::<Vec<u32>>(), vec![]);
+        assert_eq!((0u32..5).step_by(4).collect::<Vec<u32>>(), vec![0, 4]);
+        assert_eq!((0u32..4).step_by(4).collect::<Vec<u32>>(), vec![0]);
+        assert_eq!((4u32..4).step_by(4).collect::<Vec<u32>>(), vec![]);
     }
 }

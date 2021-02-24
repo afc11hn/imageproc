@@ -1,16 +1,17 @@
 //! Functions for manipulating the contrast of images.
 
-use std::cmp::{min, max};
-use image::{GrayImage, ImageBuffer, Luma};
 use crate::definitions::{HasBlack, HasWhite};
 use crate::integral_image::{integral_image, sum_image_pixels};
 use crate::stats::{cumulative_histogram, histogram};
+use image::{GrayImage, ImageBuffer, Luma};
+#[cfg(feature = "rayon")]
 use rayon::prelude::*;
+use std::cmp::{max, min};
 
 /// Applies an adaptive threshold to an image.
 ///
 /// This algorithm compares each pixel's brightness with the average brightness of the pixels
-/// in the (2 * `block_radius` + 1) square block centered on it. If the pixel if at least as bright
+/// in the (2 * `block_radius` + 1) square block centered on it. If the pixel is at least as bright
 /// as the threshold then it will have a value of 255 in the output image, otherwise 0.
 pub fn adaptive_threshold(image: &GrayImage, block_radius: u32) -> GrayImage {
     assert!(block_radius > 0);
@@ -51,9 +52,10 @@ pub fn otsu_level(image: &GrayImage) -> u8 {
     let total_weight = width * height;
 
     // Sum of all pixel intensities, to use when calculating means.
-    let total_pixel_sum = hist.channels[0].iter().enumerate().fold(0f64, |sum, (t, h)| {
-        sum + (t as u32 * h) as f64
-    });
+    let total_pixel_sum = hist.channels[0]
+        .iter()
+        .enumerate()
+        .fold(0f64, |sum, (t, h)| sum + (t as u32 * h) as f64);
 
     // Sum of all pixel intensities in the background class.
     let mut background_pixel_sum = 0f64;
@@ -85,8 +87,8 @@ pub fn otsu_level(image: &GrayImage) -> u8 {
         let foreground_mean = foreground_pixel_sum / (foreground_weight as f64);
 
         let mean_diff_squared = (background_mean - foreground_mean).powi(2);
-        let intra_class_variance = (background_weight as f64) * (foreground_weight as f64) *
-            mean_diff_squared;
+        let intra_class_variance =
+            (background_weight as f64) * (foreground_weight as f64) * mean_diff_squared;
 
         if intra_class_variance > largest_variance {
             largest_variance = intra_class_variance;
@@ -163,7 +165,18 @@ pub fn equalize_histogram_mut(image: &mut GrayImage) {
     let hist = cumulative_histogram(image).channels[0];
     let total = hist[255] as f32;
 
-    image.par_iter_mut().for_each(|p| {
+    #[cfg(feature = "rayon")]
+    let iter = image.par_iter_mut();
+    #[cfg(not(feature = "rayon"))]
+    let iter = image.iter_mut();
+
+    iter.for_each(|p| {
+        // JUSTIFICATION
+        //  Benefit
+        //      Using checked indexing here makes this function take 1.1x longer, as measured
+        //      by bench_equalize_histogram_mut
+        //  Correctness
+        //      Each channel of CumulativeChannelHistogram has length 256, and a GrayImage has 8 bits per pixel
         let fraction = unsafe { *hist.get_unchecked(*p as usize) as f32 / total };
         *p = (f32::min(255f32, 255f32 * fraction)) as u8;
     });
@@ -295,7 +308,7 @@ mod tests {
     use crate::definitions::{HasBlack, HasWhite};
     use crate::utils::gray_bench_image;
     use image::{GrayImage, Luma};
-    use test::{Bencher, black_box};
+    use test::{black_box, Bencher};
 
     #[test]
     fn adaptive_threshold_constant() {
@@ -335,8 +348,8 @@ mod tests {
 
                         let is_light_pixel = xb == x && yb == y;
 
-                        let local_mean_includes_light_pixel = (yb as i32 - y as i32).abs() <= 1 &&
-                            (xb as i32 - x as i32).abs() <= 1;
+                        let local_mean_includes_light_pixel =
+                            (yb as i32 - y as i32).abs() <= 1 && (xb as i32 - x as i32).abs() <= 1;
 
                         if is_light_pixel {
                             assert_eq!(output_intensity, 255);
@@ -375,7 +388,9 @@ mod tests {
     fn bench_match_histogram_mut(b: &mut Bencher) {
         let target = GrayImage::from_pixel(200, 200, Luma([150]));
         let mut image = gray_bench_image(200, 200);
-        b.iter(|| { match_histogram_mut(&mut image, &target); });
+        b.iter(|| {
+            match_histogram_mut(&mut image, &target);
+        });
     }
 
     #[test]
@@ -505,7 +520,9 @@ mod tests {
     #[bench]
     fn bench_equalize_histogram_mut(b: &mut Bencher) {
         let mut image = gray_bench_image(500, 500);
-        b.iter(|| { black_box(equalize_histogram_mut(&mut image)); });
+        b.iter(|| {
+            black_box(equalize_histogram_mut(&mut image));
+        });
     }
 
     #[bench]
@@ -520,7 +537,9 @@ mod tests {
     #[bench]
     fn bench_threshold_mut(b: &mut Bencher) {
         let mut image = gray_bench_image(500, 500);
-        b.iter(|| { black_box(threshold_mut(&mut image, 125)); });
+        b.iter(|| {
+            black_box(threshold_mut(&mut image, 125));
+        });
     }
 
     #[bench]
@@ -535,6 +554,8 @@ mod tests {
     #[bench]
     fn bench_stretch_contrast_mut(b: &mut Bencher) {
         let mut image = gray_bench_image(500, 500);
-        b.iter(|| { black_box(stretch_contrast_mut(&mut image, 20, 80)); });
+        b.iter(|| {
+            black_box(stretch_contrast_mut(&mut image, 20, 80));
+        });
     }
 }

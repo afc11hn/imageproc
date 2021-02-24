@@ -1,9 +1,9 @@
 //! Functions for computing [integral images](https://en.wikipedia.org/wiki/Summed_area_table)
 //! and running sums of rows and columns.
 
-use image::{Luma, GrayImage, GenericImageView, Pixel, Primitive, Rgb, Rgba};
 use crate::definitions::Image;
 use crate::map::{ChannelMap, WithChannel};
+use image::{GenericImageView, GrayImage, Luma, Pixel, Primitive, Rgb, Rgba};
 use std::ops::AddAssign;
 
 /// Computes the 2d running sum of an image. Channels are summed independently.
@@ -50,7 +50,7 @@ use std::ops::AddAssign;
 pub fn integral_image<P, T>(image: &Image<P>) -> Image<ChannelMap<P, T>>
 where
     P: Pixel<Subpixel = u8> + WithChannel<T> + 'static,
-    T: From<u8> + Primitive + AddAssign + 'static
+    T: From<u8> + Primitive + AddAssign + 'static,
 {
     integral_image_impl(image, false)
 }
@@ -89,7 +89,7 @@ where
 pub fn integral_squared_image<P, T>(image: &Image<P>) -> Image<ChannelMap<P, T>>
 where
     P: Pixel<Subpixel = u8> + WithChannel<T> + 'static,
-    T: From<u8> + Primitive + AddAssign + 'static
+    T: From<u8> + Primitive + AddAssign + 'static,
 {
     integral_image_impl(image, true)
 }
@@ -98,7 +98,7 @@ where
 fn integral_image_impl<P, T>(image: &Image<P>, square: bool) -> Image<ChannelMap<P, T>>
 where
     P: Pixel<Subpixel = u8> + WithChannel<T> + 'static,
-    T: From<u8> + Primitive + AddAssign + 'static
+    T: From<u8> + Primitive + AddAssign + 'static,
 {
     // TODO: Make faster, add a new IntegralImage type
     // TODO: to make it harder to make off-by-one errors when computing sums of regions.
@@ -112,26 +112,34 @@ where
         return out;
     }
 
-    for y in 1..out_height {
-        let mut sum = vec![T::zero(); P::channel_count() as usize];
-        for x in 1..out_width {
-            unsafe {
-                for c in 0..P::channel_count() {
-                    let pix: T = (image.unsafe_get_pixel(x - 1, y - 1).channels()[c as usize]).into();
-                    if square {
-                        sum[c as usize] += pix * pix;
-                    } else {
-                        sum[c as usize] += pix;
-                    }
-                }
+    for y in 0..in_height {
+        let mut sum = vec![T::zero(); P::CHANNEL_COUNT as usize];
+        for x in 0..in_width {
+            // JUSTIFICATION
+            //  Benefit
+            //      Using checked indexing here makes bench_integral_image_rgb take 1.05x as long
+            //      (The results are noisy, but this seems to be reproducible. I've not checked the generated assembly.)
+            //  Correctness
+            //      x and y are within bounds by definition of in_width and in_height
+            let input = unsafe { image.unsafe_get_pixel(x, y) };
+            for (s, c) in sum.iter_mut().zip(input.channels()) {
+                let pix: T = (*c).into();
+                *s += if square { pix * pix } else { pix };
+            }
 
-                let above = out.unsafe_get_pixel(x, y - 1);
-                // For some reason there's no unsafe_get_pixel_mut, so to update the existing
-                // pixel here we need to use the method with bounds checking
-                let current = out.get_pixel_mut(x, y);
-                for c in 0..P::channel_count() {
-                    current.channels_mut()[c as usize] = above.channels()[c as usize] + sum[c as usize];
-                }
+            // JUSTIFICATION
+            //  Benefit
+            //      Using checked indexing here makes bench_integral_image_rgb take 1.05x as long
+            //      (The results are noisy, but this seems to be reproducible. I've not checked the generated assembly.)
+            //  Correctness
+            //      0 <= x < in_width, 0 <= y < in_height and out has width in_width + 1 and height in_height + 1
+            let above = unsafe { out.unsafe_get_pixel(x + 1, y) };
+            // For some reason there's no unsafe_get_pixel_mut, so to update the existing
+            // pixel here we need to use the method with bounds checking
+            let current = out.get_pixel_mut(x + 1, y + 1);
+            // Using zip here makes this slower.
+            for c in 0..P::CHANNEL_COUNT {
+                current.channels_mut()[c as usize] = above.channels()[c as usize] + sum[c as usize];
             }
         }
     }
@@ -191,15 +199,30 @@ impl<T: Primitive + 'static> ArrayData for Rgba<T> {
     type DataType = [T; 4];
 
     fn data(&self) -> Self::DataType {
-        [self.channels()[0], self.channels()[1], self.channels()[2], self.channels()[3]]
+        [
+            self.channels()[0],
+            self.channels()[1],
+            self.channels()[2],
+            self.channels()[3],
+        ]
     }
 
     fn add(lhs: Self::DataType, rhs: Self::DataType) -> Self::DataType {
-        [lhs[0] + rhs[0], lhs[1] + rhs[1], lhs[2] + rhs[2], lhs[3] + rhs[3]]
+        [
+            lhs[0] + rhs[0],
+            lhs[1] + rhs[1],
+            lhs[2] + rhs[2],
+            lhs[3] + rhs[3],
+        ]
     }
 
     fn sub(lhs: Self::DataType, rhs: Self::DataType) -> Self::DataType {
-        [lhs[0] - rhs[0], lhs[1] - rhs[1], lhs[2] - rhs[2], lhs[3] - rhs[3]]
+        [
+            lhs[0] - rhs[0],
+            lhs[1] - rhs[1],
+            lhs[2] - rhs[2],
+            lhs[3] - rhs[3],
+        ]
     }
 }
 
@@ -220,16 +243,15 @@ pub fn sum_image_pixels<P>(
     bottom: u32,
 ) -> P::DataType
 where
-    P: Pixel + ArrayData + Copy + 'static
+    P: Pixel + ArrayData + Copy + 'static,
 {
     // TODO: better type-safety. It's too easy to pass the original image in here by mistake.
     // TODO: it's also hard to see what the four u32s mean at the call site - use a Rect instead.
-    let (a, b, c, d) =
-    (
+    let (a, b, c, d) = (
         integral_image.get_pixel(right + 1, bottom + 1).data(),
         integral_image.get_pixel(left, top).data(),
         integral_image.get_pixel(right + 1, top).data(),
-        integral_image.get_pixel(left, bottom + 1).data()
+        integral_image.get_pixel(left, bottom + 1).data(),
     );
     P::sub(P::sub(P::add(a, b), c), d)
 }
@@ -286,6 +308,11 @@ pub fn variance(
 /// Takes a reference to buffer so that this can be reused
 /// for all rows in an image.
 ///
+/// # Panics
+/// - If `buffer.len() < 2 * padding + image.width()`.
+/// - If `row >= image.height()`.
+/// - If `image.width() == 0`.
+///
 /// # Examples
 /// ```
 /// # extern crate image;
@@ -309,36 +336,34 @@ pub fn variance(
 pub fn row_running_sum(image: &GrayImage, row: u32, buffer: &mut [u32], padding: u32) {
     // TODO: faster, more formats
     let (width, height) = image.dimensions();
+    let (width, padding) = (width as usize, padding as usize);
     assert!(
-        buffer.len() >= (width + 2 * padding) as usize,
-        format!(
-            "Buffer length {} is less than {} + 2 * {}",
-            buffer.len(),
-            width,
-            padding
-        )
+        buffer.len() >= width + 2 * padding,
+        "Buffer length {} is less than {} + 2 * {}",
+        buffer.len(),
+        width,
+        padding
     );
-    assert!(
-        row < height,
-        format!("row out of bounds: {} >= {}", row, height)
-    );
+    assert!(row < height, "row out of bounds: {} >= {}", row, height);
+    assert!(width > 0, "image is empty");
 
-    unsafe {
-        let mut sum = 0;
-        for x in 0..padding {
-            sum += image.unsafe_get_pixel(0, row)[0] as u32;
-            *buffer.get_unchecked_mut(x as usize) = sum;
-        }
+    let row_data = &(**image)[width * row as usize..][..width];
+    let first = row_data[0] as u32;
+    let last = row_data[width - 1] as u32;
 
-        for x in 0..width {
-            sum += image.unsafe_get_pixel(x, row)[0] as u32;
-            *buffer.get_unchecked_mut((x + padding) as usize) = sum;
-        }
+    let mut sum = 0;
 
-        for x in 0..padding {
-            sum += image.unsafe_get_pixel(width - 1, row)[0] as u32;
-            *buffer.get_unchecked_mut((x + width + padding) as usize) = sum;
-        }
+    for b in &mut buffer[..padding] {
+        sum += first;
+        *b = sum;
+    }
+    for (b, p) in buffer[padding..].iter_mut().zip(row_data) {
+        sum += *p as u32;
+        *b = sum;
+    }
+    for b in &mut buffer[padding + width..] {
+        sum += last;
+        *b = sum;
     }
 }
 
@@ -346,6 +371,11 @@ pub fn row_running_sum(image: &GrayImage, row: u32, buffer: &mut [u32], padding:
 /// at the top and bottom. The padding is by continuity.
 /// Takes a reference to buffer so that this can be reused
 /// for all columns in an image.
+///
+/// # Panics
+/// - If `buffer.len() < 2 * padding + image.height()`.
+/// - If `column >= image.width()`.
+/// - If `image.height() == 0`.
 ///
 /// # Examples
 /// ```
@@ -372,47 +402,62 @@ pub fn column_running_sum(image: &GrayImage, column: u32, buffer: &mut [u32], pa
     // TODO: faster, more formats
     let (width, height) = image.dimensions();
     assert!(
-        buffer.len() >= (height + 2 * padding) as usize,
-        format!(
-            "Buffer length {} is less than {} + 2 * {}",
-            buffer.len(),
-            height,
-            padding
-        )
+        // assertion 1
+        buffer.len() >= height as usize + 2 * padding as usize,
+        "Buffer length {} is less than {} + 2 * {}",
+        buffer.len(),
+        height,
+        padding
     );
     assert!(
+        // assertion 2
         column < width,
-        format!("column out of bounds: {} >= {}", column, width)
+        "column out of bounds: {} >= {}",
+        column,
+        width
+    );
+    assert!(
+        // assertion 3
+        height > 0,
+        "image is empty"
     );
 
-    unsafe {
-        let mut sum = 0;
-        for y in 0..padding {
-            sum += image.unsafe_get_pixel(column, 0)[0] as u32;
-            *buffer.get_unchecked_mut(y as usize) = sum;
-        }
+    let first = image.get_pixel(column, 0)[0] as u32;
+    let last = image.get_pixel(column, height - 1)[0] as u32;
 
+    let mut sum = 0;
+
+    for b in &mut buffer[..padding as usize] {
+        sum += first;
+        *b = sum;
+    }
+    // JUSTIFICATION:
+    //  Benefit
+    //      Using checked indexing here makes this function take 1.8x longer, as measured by bench_column_running_sum
+    //  Correctness
+    //      column is in bounds due to assertion 2.
+    //      height + padding - 1 < buffer.len() due to assertions 1 and 3.
+    unsafe {
         for y in 0..height {
             sum += image.unsafe_get_pixel(column, y)[0] as u32;
-            *buffer.get_unchecked_mut((y + padding) as usize) = sum;
+            *buffer.get_unchecked_mut(y as usize + padding as usize) = sum;
         }
-
-        for y in 0..padding {
-            sum += image.unsafe_get_pixel(column, height - 1)[0] as u32;
-            *buffer.get_unchecked_mut((y + height + padding) as usize) = sum;
-        }
+    }
+    for b in &mut buffer[padding as usize + height as usize..] {
+        sum += last;
+        *b = sum;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::definitions::Image;
     use crate::property_testing::GrayTestImage;
     use crate::utils::{gray_bench_image, pixel_diff_summary, rgb_bench_image};
+    use ::test;
     use image::{GenericImage, ImageBuffer, Luma};
     use quickcheck::{quickcheck, TestResult};
-    use crate::definitions::Image;
-    use ::test;
 
     #[test]
     fn test_integral_image_gray() {
@@ -479,41 +524,23 @@ mod tests {
         let integral = integral_image::<_, u32>(&image);
 
         // Top left
-        assert_eq!(
-            sum_image_pixels(&integral, 0, 0, 0, 0),
-            [1, 2, 3]);
+        assert_eq!(sum_image_pixels(&integral, 0, 0, 0, 0), [1, 2, 3]);
         // Top row
-        assert_eq!(
-            sum_image_pixels(&integral, 0, 0, 1, 0),
-            [5, 7, 9]);
+        assert_eq!(sum_image_pixels(&integral, 0, 0, 1, 0), [5, 7, 9]);
         // Left column
-        assert_eq!(
-            sum_image_pixels(&integral, 0, 0, 0, 1),
-            [8, 10, 12]);
+        assert_eq!(sum_image_pixels(&integral, 0, 0, 0, 1), [8, 10, 12]);
         // Whole image
-        assert_eq!(
-            sum_image_pixels(&integral, 0, 0, 1, 1),
-            [22, 26, 30]);
+        assert_eq!(sum_image_pixels(&integral, 0, 0, 1, 1), [22, 26, 30]);
         // Top right
-        assert_eq!(
-            sum_image_pixels(&integral, 1, 0, 1, 0),
-            [4, 5, 6]);
+        assert_eq!(sum_image_pixels(&integral, 1, 0, 1, 0), [4, 5, 6]);
         // Right column
-        assert_eq!(
-            sum_image_pixels(&integral, 1, 0, 1, 1),
-            [14, 16, 18]);
+        assert_eq!(sum_image_pixels(&integral, 1, 0, 1, 1), [14, 16, 18]);
         // Bottom left
-        assert_eq!(
-            sum_image_pixels(&integral, 0, 1, 0, 1),
-            [7, 8, 9]);
+        assert_eq!(sum_image_pixels(&integral, 0, 1, 0, 1), [7, 8, 9]);
         // Bottom row
-        assert_eq!(
-            sum_image_pixels(&integral, 0, 1, 1, 1),
-            [17, 19, 21]);
+        assert_eq!(sum_image_pixels(&integral, 0, 1, 1, 1), [17, 19, 21]);
         // Bottom right
-        assert_eq!(
-            sum_image_pixels(&integral, 1, 1, 1, 1),
-            [10, 11, 12]);
+        assert_eq!(sum_image_pixels(&integral, 1, 1, 1, 1), [10, 11, 12]);
     }
 
     #[bench]
@@ -577,13 +604,17 @@ mod tests {
     fn bench_row_running_sum(b: &mut test::Bencher) {
         let image = gray_bench_image(1000, 1);
         let mut buffer = [0; 1010];
-        b.iter(|| { row_running_sum(&image, 0, &mut buffer, 5); });
+        b.iter(|| {
+            row_running_sum(&image, 0, &mut buffer, 5);
+        });
     }
 
     #[bench]
     fn bench_column_running_sum(b: &mut test::Bencher) {
         let image = gray_bench_image(100, 1000);
         let mut buffer = [0; 1010];
-        b.iter(|| { column_running_sum(&image, 0, &mut buffer, 5); });
+        b.iter(|| {
+            column_running_sum(&image, 0, &mut buffer, 5);
+        });
     }
 }

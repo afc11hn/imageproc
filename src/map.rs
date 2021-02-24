@@ -1,6 +1,6 @@
 //! Functions for mapping over pixels, colors or subpixels of images.
 
-use image::{GenericImage, ImageBuffer, Luma, Pixel, Primitive, Rgb, Rgba};
+use image::{Bgr, Bgra, GenericImage, ImageBuffer, Luma, LumaA, Pixel, Primitive, Rgb, Rgba};
 
 use crate::definitions::Image;
 
@@ -31,12 +31,36 @@ where
     type Pixel = Rgba<U>;
 }
 
+impl<T, U> WithChannel<U> for Bgr<T>
+where
+    T: Primitive + 'static,
+    U: Primitive + 'static,
+{
+    type Pixel = Bgr<U>;
+}
+
+impl<T, U> WithChannel<U> for Bgra<T>
+where
+    T: Primitive + 'static,
+    U: Primitive + 'static,
+{
+    type Pixel = Bgra<U>;
+}
+
 impl<T, U> WithChannel<U> for Luma<T>
 where
     T: Primitive + 'static,
     U: Primitive + 'static,
 {
     type Pixel = Luma<U>;
+}
+
+impl<T, U> WithChannel<U> for LumaA<T>
+where
+    T: Primitive + 'static,
+    U: Primitive + 'static,
+{
+    type Pixel = LumaA<U>;
 }
 
 /// Applies `f` to each subpixel of the input image.
@@ -75,11 +99,12 @@ where
     for y in 0..height {
         for x in 0..width {
             let out_channels = out.get_pixel_mut(x, y).channels_mut();
-            for c in 0..P::channel_count() {
+            for c in 0..P::CHANNEL_COUNT {
                 out_channels[c as usize] = f(unsafe {
-                    *image.unsafe_get_pixel(x, y).channels().get_unchecked(
-                        c as usize,
-                    )
+                    *image
+                        .unsafe_get_pixel(x, y)
+                        .channels()
+                        .get_unchecked(c as usize)
                 });
             }
         }

@@ -3,16 +3,19 @@
 mod median;
 pub use self::median::median_filter;
 
-use image::{GrayImage, GenericImage, GenericImageView, ImageBuffer, Luma, Pixel, Primitive};
+mod sharpen;
+pub use self::sharpen::*;
 
-use crate::integral_image::{column_running_sum, row_running_sum};
-use crate::map::{WithChannel, ChannelMap};
+use image::{GenericImage, GenericImageView, GrayImage, ImageBuffer, Luma, Pixel, Primitive};
+
 use crate::definitions::{Clamp, Image};
+use crate::integral_image::{column_running_sum, row_running_sum};
+use crate::map::{ChannelMap, WithChannel};
 use num::Num;
 
-use conv::ValueInto;
 use crate::math::cast;
-use std::cmp::{min, max};
+use conv::ValueInto;
+use std::cmp::{max, min};
 use std::f32;
 
 /// Convolves an 8bpp grayscale image with a kernel of width (2 * `x_radius` + 1)
@@ -94,7 +97,11 @@ impl<'a, K: Num + Copy + 'a> Kernel<'a, K> {
                 data.len()
             )
         );
-        Kernel { data, width, height }
+        Kernel {
+            data,
+            width,
+            height,
+        }
     }
 
     /// Returns 2d correlation of an image. Intermediate calculations are performed
@@ -104,11 +111,11 @@ impl<'a, K: Num + Copy + 'a> Kernel<'a, K> {
         P: Pixel + 'static,
         <P as Pixel>::Subpixel: ValueInto<K>,
         Q: Pixel + 'static,
-        F: FnMut(&mut Q::Subpixel, K) -> (),
+        F: FnMut(&mut Q::Subpixel, K),
     {
         let (width, height) = image.dimensions();
         let mut out = Image::<Q>::new(width, height);
-        let num_channels = P::channel_count() as usize;
+        let num_channels = P::CHANNEL_COUNT as usize;
         let zero = K::zero();
         let mut acc = vec![zero; num_channels];
         let (k_width, k_height) = (self.width as i64, self.height as i64);
@@ -123,7 +130,7 @@ impl<'a, K: Num + Copy + 'a> Kernel<'a, K> {
                         accumulate(
                             &mut acc,
                             unsafe { &image.unsafe_get_pixel(x_p, y_p) },
-                            unsafe { *self.data.get_unchecked((k_y * k_width + k_x) as usize) }
+                            unsafe { *self.data.get_unchecked((k_y * k_width + k_x) as usize) },
                         );
                     }
                 }
@@ -211,7 +218,7 @@ where
     kernel.filter(image, |channel, acc| *channel = S::clamp(acc))
 }
 
-///	Returns horizontal correlations between an image and a 1d kernel.
+/// Returns horizontal correlations between an image and a 1d kernel.
 /// Pads by continuity. Intermediate calculations are performed at
 /// type K.
 pub fn horizontal_filter<P, K>(image: &Image<P>, kernel: &[K]) -> Image<P>
@@ -226,7 +233,7 @@ where
     let (width, height) = image.dimensions();
     let mut out = Image::<P>::new(width, height);
     let zero = K::zero();
-    let mut acc = vec![zero; P::channel_count() as usize];
+    let mut acc = vec![zero; P::CHANNEL_COUNT as usize];
     let k_width = kernel.len() as i32;
 
     // Typically the image side will be much larger than the kernel length.
@@ -307,7 +314,7 @@ where
     out
 }
 
-///	Returns horizontal correlations between an image and a 1d kernel.
+/// Returns horizontal correlations between an image and a 1d kernel.
 /// Pads by continuity.
 pub fn vertical_filter<P, K>(image: &Image<P>, kernel: &[K]) -> Image<P>
 where
@@ -321,7 +328,7 @@ where
     let (width, height) = image.dimensions();
     let mut out = Image::<P>::new(width, height);
     let zero = K::zero();
-    let mut acc = vec![zero; P::channel_count() as usize];
+    let mut acc = vec![zero; P::CHANNEL_COUNT as usize];
     let k_height = kernel.len() as i32;
 
     // Typically the image side will be much larger than the kernel length.
@@ -412,7 +419,7 @@ where
     <P as Pixel>::Subpixel: ValueInto<K>,
     K: Num + Copy,
 {
-    for i in 0..(P::channel_count() as usize) {
+    for i in 0..(P::CHANNEL_COUNT as usize) {
         acc[i as usize] = acc[i as usize] + cast(pixel.channels()[i]) * weight;
     }
 }
@@ -420,12 +427,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::{gray_bench_image, rgb_bench_image};
-    use image::{GenericImage, GrayImage, ImageBuffer, Luma, Rgb};
     use crate::definitions::{Clamp, Image};
+    use crate::utils::{gray_bench_image, rgb_bench_image};
     use image::imageops::blur;
-    use test::{Bencher, black_box};
-    use std::cmp::{min, max};
+    use image::{GenericImage, GrayImage, ImageBuffer, Luma, Rgb};
+    use std::cmp::{max, min};
+    use test::{black_box, Bencher};
 
     #[test]
     fn test_box_filter_handles_empty_images() {
@@ -518,11 +525,9 @@ mod tests {
 
         for y in 0..height {
             for x in 0..width {
-
                 let mut acc = 0f32;
 
                 for k in 0..kernel.len() {
-
                     let mut x_unchecked = x as i32 + k as i32 - (kernel.len() / 2) as i32;
                     x_unchecked = max(0, x_unchecked);
                     x_unchecked = min(x_unchecked, width as i32 - 1);
@@ -550,11 +555,9 @@ mod tests {
 
         for y in 0..height {
             for x in 0..width {
-
                 let mut acc = 0f32;
 
                 for k in 0..kernel.len() {
-
                     let mut y_unchecked = y as i32 + k as i32 - (kernel.len() / 2) as i32;
                     y_unchecked = max(0, y_unchecked);
                     y_unchecked = min(y_unchecked, height as i32 - 1);
@@ -597,7 +600,7 @@ mod tests {
                     }
                 }
             }
-        }
+        };
     }
 
     test_against_reference_implementation!(
@@ -692,10 +695,12 @@ mod tests {
 
     #[test]
     fn test_filter3x3_with_results_outside_input_channel_range() {
+        #[rustfmt::skip]
         let kernel: Vec<i32> = vec![
             -1, 0, 1,
             -2, 0, 2,
-            -1, 0, 1];
+            -1, 0, 1
+        ];
 
         let image = gray_image!(
             3, 2, 1;
@@ -754,16 +759,15 @@ mod tests {
             9, 4;
             8, 1);
 
+        #[rustfmt::skip]
         let k: Vec<f32> = vec![
             0.1, 0.2, 0.1,
             0.2, 0.4, 0.2,
             0.1, 0.2, 0.1
         ];
         let kernel = Kernel::new(&k, 3, 3);
-        let filtered: Image<Luma<u8>> = kernel.filter(
-            &image,
-            |c, a| *c = <u8 as Clamp<f32>>::clamp(a)
-        );
+        let filtered: Image<Luma<u8>> =
+            kernel.filter(&image, |c, a| *c = <u8 as Clamp<f32>>::clamp(a));
 
         let expected = gray_image!(
             11,  7;
@@ -775,10 +779,12 @@ mod tests {
     #[bench]
     fn bench_filter3x3_i32_filter(b: &mut Bencher) {
         let image = gray_bench_image(500, 500);
+        #[rustfmt::skip]
         let kernel: Vec<i32> = vec![
             -1, 0, 1,
             -2, 0, 2,
-            -1, 0, 1];
+            -1, 0, 1
+        ];
 
         b.iter(|| {
             let filtered: ImageBuffer<Luma<i16>, Vec<i16>> =

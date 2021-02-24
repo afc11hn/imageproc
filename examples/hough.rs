@@ -3,13 +3,13 @@
 //! wrench image in /examples by running
 //! `cargo run --example hough ./examples/wrench.jpg ./tmp`
 
-use std::env;
-use std::path::Path;
-use std::fs;
 use image::{open, Rgb};
 use imageproc::edges::canny;
 use imageproc::hough::{detect_lines, draw_polar_lines, LineDetectionOptions, PolarLine};
 use imageproc::map::map_colors;
+use std::env;
+use std::fs;
+use std::path::Path;
 
 fn main() {
     if env::args().len() != 3 {
@@ -47,13 +47,13 @@ fn main() {
     // Detect lines using Hough transform
     let options = LineDetectionOptions {
         vote_threshold: 40,
-        suppression_radius: 8
+        suppression_radius: 8,
     };
     let lines: Vec<PolarLine> = detect_lines(&edges, options);
 
-    let white = Rgb([255, 255, 255]);
-    let green = Rgb([0, 255, 0]);
-    let black = Rgb([0, 0, 0]);
+    let white = Rgb::<u8>([255, 255, 255]);
+    let green = Rgb::<u8>([0, 255, 0]);
+    let black = Rgb::<u8>([0, 0, 0]);
 
     // Convert edge image to colour
     let color_edges = map_colors(&edges, |p| if p[0] > 0 { white } else { black });
