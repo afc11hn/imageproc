@@ -106,6 +106,44 @@ fn calculate_center(
     ((rectangle_size - content_size) as f32 * relative_position.0 / 100.0) as u32
 }
 
+fn find_text_area_coordinates(
+    position: &Position,
+    rectangle: &IpRect,
+    width: u32,
+    height: u32,
+) -> (u32, u32) {
+    match position {
+        Position::HorizontalCenter(edge_position) => (
+            rectangle.left() as u32 + calculate_center(rectangle.width(), width, edge_position),
+            rectangle.top() as u32 + ((rectangle.height() - height) / 2) as u32,
+        ),
+        Position::HorizontalBottom(edge_position) => (
+            rectangle.left() as u32 + calculate_center(rectangle.width(), width, edge_position),
+            rectangle.bottom() as u32 - height,
+        ),
+        Position::HorizontalTop(edge_position) => (
+            rectangle.left() as u32 + calculate_center(rectangle.width(), width, edge_position),
+            rectangle.top() as u32,
+        ),
+        Position::VerticalCenter(edge_position) => (
+            rectangle.left() as u32 + ((rectangle.width() - width) / 2) as u32,
+            rectangle.top() as u32 + calculate_center(rectangle.height(), height, edge_position),
+        ),
+        Position::VerticalRight(edge_position) => (
+            rectangle.right() as u32 - width,
+            rectangle.top() as u32 + calculate_center(rectangle.height(), height, edge_position),
+        ),
+        Position::VerticalLeft(edge_position) => (
+            rectangle.left() as u32,
+            rectangle.top() as u32 + calculate_center(rectangle.height(), height, edge_position),
+        ),
+        Position::Any(horizontal_edge, vertical_edge) => (
+            rectangle.left() as u32 + calculate_center(rectangle.width(), width, horizontal_edge),
+            rectangle.top() as u32 + calculate_center(rectangle.height(), height, vertical_edge),
+        ),
+    }
+}
+
 /// An arrangement of glyphs which can be drawn onto an image.
 /// This string also knows about its size, according to scaling and font properties.
 pub struct GlyphString<'a> {
@@ -259,44 +297,9 @@ impl<'a> GlyphString<'a> {
         I: GenericImage,
         <I::Pixel as Pixel>::Subpixel: ValueInto<f32> + Clamp<f32>,
     {
-        let (x, y) = match position {
-            Position::HorizontalCenter(edge_position) => (
-                rectangle.left() as u32
-                    + calculate_center(rectangle.width(), self.width(), edge_position),
-                rectangle.top() as u32 + ((rectangle.height() - self.height()) / 2) as u32,
-            ),
-            Position::HorizontalBottom(edge_position) => (
-                rectangle.left() as u32
-                    + calculate_center(rectangle.width(), self.width(), edge_position),
-                rectangle.bottom() as u32 - self.height(),
-            ),
-            Position::HorizontalTop(edge_position) => (
-                rectangle.left() as u32
-                    + calculate_center(rectangle.width(), self.width(), edge_position),
-                rectangle.top() as u32,
-            ),
-            Position::VerticalCenter(edge_position) => (
-                rectangle.left() as u32 + ((rectangle.width() - self.width()) / 2) as u32,
-                rectangle.top() as u32
-                    + calculate_center(rectangle.height(), self.height(), edge_position),
-            ),
-            Position::VerticalRight(edge_position) => (
-                rectangle.right() as u32 - self.width(),
-                rectangle.top() as u32
-                    + calculate_center(rectangle.height(), self.height(), edge_position),
-            ),
-            Position::VerticalLeft(edge_position) => (
-                rectangle.left() as u32,
-                rectangle.top() as u32
-                    + calculate_center(rectangle.height(), self.height(), edge_position),
-            ),
-            Position::Any(horizontal_edge, vertical_edge) => (
-                rectangle.left() as u32
-                    + calculate_center(rectangle.width(), self.width(), horizontal_edge),
-                rectangle.top() as u32
-                    + calculate_center(rectangle.height(), self.height(), vertical_edge),
-            ),
-        };
+        let width = self.width();
+        let height = self.height();
+        let (x, y) = find_text_area_coordinates(position, rectangle, width, height);
 
         self.draw_mut(image, color, x, y)
     }
@@ -471,44 +474,9 @@ impl<'a> GlyphStrings<'a> {
         I: GenericImage,
         <I::Pixel as Pixel>::Subpixel: ValueInto<f32> + Clamp<f32>,
     {
-        let (mut x, y) = match position {
-            Position::HorizontalCenter(edge_position) => (
-                rectangle.left() as u32
-                    + calculate_center(rectangle.width(), self.width(), edge_position),
-                rectangle.top() as u32 + ((rectangle.height() - self.height()) / 2) as u32,
-            ),
-            Position::HorizontalBottom(edge_position) => (
-                rectangle.left() as u32
-                    + calculate_center(rectangle.width(), self.width(), edge_position),
-                rectangle.bottom() as u32 - self.height(),
-            ),
-            Position::HorizontalTop(edge_position) => (
-                rectangle.left() as u32
-                    + calculate_center(rectangle.width(), self.width(), edge_position),
-                rectangle.top() as u32,
-            ),
-            Position::VerticalCenter(edge_position) => (
-                rectangle.left() as u32 + ((rectangle.width() - self.width()) / 2) as u32,
-                rectangle.top() as u32
-                    + calculate_center(rectangle.height(), self.height(), edge_position),
-            ),
-            Position::VerticalRight(edge_position) => (
-                rectangle.right() as u32 - self.width(),
-                rectangle.top() as u32
-                    + calculate_center(rectangle.height(), self.height(), edge_position),
-            ),
-            Position::VerticalLeft(edge_position) => (
-                rectangle.left() as u32,
-                rectangle.top() as u32
-                    + calculate_center(rectangle.height(), self.height(), edge_position),
-            ),
-            Position::Any(horizontal_edge, vertical_edge) => (
-                rectangle.left() as u32
-                    + calculate_center(rectangle.width(), self.width(), horizontal_edge),
-                rectangle.top() as u32
-                    + calculate_center(rectangle.height(), self.height(), vertical_edge),
-            ),
-        };
+        let width = self.width();
+        let height = self.height();
+        let (mut x, y) = find_text_area_coordinates(position, rectangle, width, height);
 
         for (string, &color) in self.0.iter().zip(colors.iter()) {
             string.draw_mut(image, color, x as _, y as _);
